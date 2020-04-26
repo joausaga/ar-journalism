@@ -1,0 +1,838 @@
+---
+title: "AR in Journalism"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(foreign)
+library(stringr)
+library(reshape)
+library(phia)
+library(ARTool)
+library(dplyr)
+
+
+# Functions
+pairwise_test_levels = function(df, variable, levels, paired) {
+  test_result = wilcox.test(df[df[, variable] == levels[1],]$value, 
+                            df[df[, variable] == levels[2],]$value, 
+                            paired=paired)
+  return(test_result)
+}
+
+do_post_hoc_modalities = function(df) {
+  modalities = list(c('AR', 'INTERACTIVE'), c('AR', 'STATIC'), 
+                    c('INTERACTIVE', 'STATIC'))
+  for (i in 1:length(modalities)) {
+    pwm = pairwise_test_levels(df,'modality',modalities[[i]],FALSE)
+    if (p.adjust(pwm$p.value) <= 0.05) {
+      writeLines(paste0('Significant difference found between: ', modalities[[i]][1], 
+                        ' and ', modalities[[i]][2], '\n--- Method=', 
+                        pwm$method, '\n--- W=', pwm$statistic, '\n--- p-value=', pwm$p.value, '\n'))
+    }
+  }
+}
+
+do_post_hoc_pieces = function(df) {
+  pieces = list(c('thai', 'syria'), c('thai', 'olympic'), 
+                    c('syria', 'olympic'))
+  for (i in 1:length(pieces)) {
+    pwm = pairwise_test_levels(df,'piece',pieces[[i]],FALSE)
+    if (p.adjust(pwm$p.value) <= 0.05) {
+      writeLines(paste0('Significant difference found between: ', pieces[[i]][1], 
+                        ' and ', pieces[[i]][2], '\n--- Method=', 
+                        pwm$method, '\n--- W=', pwm$statistic, '\n--- p-value=', pwm$p.value, '\n'))
+    }
+  }
+}
+
+pairwise_test_modalities_piece = function(df, modalities, piece, paired) {
+  test_result = wilcox.test(df[df$modality == modalities[1] & df$piece == piece,]$value, 
+                            df[df$modality == modalities[2] & df$piece == piece,]$value, 
+                            paired=paired)
+  return(test_result)
+}
+
+do_post_hoc_modalities_pieces = function(df) {
+  modalities = list(c('AR', 'INTERACTIVE'), c('AR', 'STATIC'), 
+                    c('INTERACTIVE', 'STATIC'))
+  pieces = c('thai', 'syria', 'olympic')
+  for (i in 1:length(modalities)) {
+    for (j in 1:length(pieces)) {
+      pwm = pairwise_test_modalities_piece(df,modalities[[i]],pieces[j],FALSE)
+      if (p.adjust(pwm$p.value) <= 0.05) {
+        writeLines(paste0('Significant difference found between: ', modalities[[i]][1], 
+                          ' and ', modalities[[i]][2], ' on piece ', pieces[j], '\n--- Method=', 
+                          pwm$method, '\n--- W=', pwm$statistic, '\n--- p-value=', pwm$p.value, '\n'))
+      }
+    }
+  }
+}
+
+prepare_data = function(df, cols) {
+  # Select interested columns
+  df = df[,cols]
+  # Rename columns
+  colnames(df) = c('subject','modality','olympic', 'syria', 'thai')
+  # Remove NAs
+  df = df[complete.cases(df), ]
+  print(paste0('Subjects removed because of missing values: ', 79-nrow(df)))
+  # Melting data
+  m_df = melt(df, id=c('subject', 'modality'))
+  colnames(m_df) = c('subject', 'modality', 'piece', 'value')
+  m_df$modality = as.factor(m_df$modality)
+  return (m_df)
+}
+
+do_analysis = function(df, cols) {
+  # Define model
+  m = art(value ~ piece * modality + (1|subject), data=df)
+  # Conduct anova
+  print(anova(m))
+  # Analyze difference in interactions
+  print(testInteractions(artlm(m, "piece:modality"), pairwise=c("piece", "modality"), 
+                         adjustment="holm"))
+}
+
+# Load data
+df = read.csv(file="./data/AR_ALL_DATA_ADDITIONS_LAST.csv", header=TRUE, sep=";")
+u_df = read.csv(file="./data/usability.csv", header=TRUE, sep=",")
+ra_df = read.csv(file="./data/relevancy_accuracy.csv", header=TRUE, sep=",")
+
+# Drop some unused columns
+drops = c("PRESENCE_TOTAL_OLYM","PRESENCE_TOTAL_SYRIA","PRESENCE_TOTAL_THAI")
+ra_df = ra_df[ , !(names(ra_df) %in% drops)]
+
+# Merge datasets
+df = merge(df, u_df, by=c('SUBJECT', 'CONDITION'))
+df = merge(df, ra_df, by=c('SUBJECT', 'CONDITION'))
+
+# Inital data preparation
+remove_comma = function(col) {
+  return (as.numeric(gsub(',', '.', col)))
+}
+df_c = cbind(as.data.frame(apply(df[,c(1:4)], 2, as.factor)),
+             as.data.frame(apply(df[,c(5:ncol(df))], 2, remove_comma)))
+df_c[,2] = ifelse(df[,2]==1, 'AR', ifelse(df[,2]==2, 'INTERACTIVE', 'STATIC'))
+```
+
+Understanding the effect of Augmented Reality (AR) in Journalism. 
+
+Three reading modalities were defined:
+
+* Augmented Reality (AR)
+* Interactive visualizations (INTERACTIVE)
+* Static visualizations (STATIC)
+
+Three pieces of information were defined:
+
+* Chemical bomb attack in Syria (Syria)
+* Youth soccer team reascue operation in Thailand (Thai)
+* Olympici skate figure Nathan Chen (Olympic)
+
+## Method
+
+Align-and-rank data for non-paramentric ANOVA was applied to understand the 
+effect of the reading modalities (see [here](http://depts.washington.edu/madlab/proj/art/index.html) 
+for more information on the analysis method). The difference of difference method 
+was employed to conduct post hoc pairwise comparison of levels within individual factors.
+
+## Sense of Presence
+
+Studying the effect of the modality and piece of information in the subjects'
+sense of presence.
+
+```{r}
+i_cols = c('SUBJECT','CONDITION','PRESENCE_TOTAL_OLYM', 'PRESENCE_TOTAL_SYRIA', 
+           'PRESENCE_TOTAL_THAI')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r sense_presence2, echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The sense of presence is significalty affected by the reading modality, the 
+piece of information, and the interaction between them.*
+
+### Post-Hoc on Modality
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities(p_data)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*The post hoc analysis shows that there is a significant difference in the sense
+of presence between AR and Interactive and AR and Static on the syria and 
+olympic pieces*
+
+## Narrative Engagement and Transportation
+
+Studying the effect of the modality and piece of information in the subjects'
+narrative engagement and transportation.
+
+```{r}
+i_cols = c('SUBJECT','CONDITION','ENGAGE_TOTAL_OLYM', 'ENGAGE_TOTAL_SYRIA', 
+           'ENGAGE_TOTAL_THAI')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The piece of information affects significantly the narrative engagement and
+transportation. Additionally, the interaction between modality and piece of
+information appears to signficanly influence engagement and transportation also.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*There is a significant difference in the engagement and transportation between 
+AR and Interactive on the Olympic piece. A similar result is found between
+Interactive and Static.*
+
+## Perceived Learning
+
+Studying the effect of the modality and piece of information in the subjects'
+perceived learning.
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'PERCEIV_LEARN_VISU_TOTAL_OLYM', 
+           'PERCEIV_LEARN_VISU_TOTAL_SYRIA', 'PERCEIV_LEARN_VISU_TOTAL_THAI')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*What influence the perceived learning is the interaction between reading modality 
+and piece of information.*
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*There is significant difference in the perceived learning between AR and Interactive
+on the Thai piece.*
+
+## Perceived Learning (II)
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'PerceiveLearnGeneral_O', 
+           'PerceiveLearnGeneral_T', 'PerceiveLearnGeneral_S')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+## Objective knowledge gain (I)
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'OBJECT_LEARN_DESC_O', 
+           'OBJECT_LEARN_DESC_ALL_S', 'OBJECT_LEARN_DESC_TOT_T')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+# column names different from paper
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The piece of information influences significantly the objective knowledge gain.
+The interaction between modality and piece of information show to have a significant
+effect as well.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*There is significant difference in the perceived learning between AR and Interactive
+on the Syria piece.*
+
+## Objective knowledge gain (II)
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'OBJECT_LEARN_SPEC_ALL_O', 
+           'OBJECTLEARN_SPEC_ALL_S', 'OBJECT_LEARN_SPEC_TOT_T')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+# column names different from paper
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The piece of information affects significantly the objective knowledge gain.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+## Perceived Realism and Authenticity
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'JOURNAL_TOTAL_OLYM', 'JOURNAL_TOTAL_SYRIA', 
+           'JOURNAL_TOTAL_THAI')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The piece of information affects significantly the perceived of realism and
+authenticity.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+## Journalistic Norms
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'AUTENTICITY_TOTAL_OLYM', 
+           'AUTENTICITY_TOTAL_SYRIA', 'AUTENTICITY_TOTAL_THAI')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The pieces of information and their interactions with the reading modality 
+influece significantly the journalism norms.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*There is a significant difference in the perceived learning between AR and Interactive
+on the Thai piece. Similarly, the difference between Interactive and Static is
+significant on the Thai piece.*
+
+## Relevance
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'Rel_O', 'Rel_S', 'Rel_T')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The pieces of information influece significantly in relevance.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*There is a significant difference in relevance between AR and Static
+on the Thai piece.*
+
+## Accuracy
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'Acc_O', 'Acc_S', 'Acc_T')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The pieces of information influece significantly the accuracy.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+## Usability
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'USABILITY_O', 'USABILITY_S', 'USABILITY_T')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+# columns name differente from paper
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+### Analysis of Variance
+
+```{r}
+# Define model
+m = art(value ~ modality * piece + (1|subject), data=p_data)
+anova(m)
+```
+
+*The pieces of information affect significantly the usability.*
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+## Intention to adopt the technology
+
+```{r}
+i_cols = c('SUBJECT','CONDITION', 'WILLING_TOTAL_OLYM', 'WILLING_TOTAL_SYRIA', 
+           'WILLING_TOTAL_THAI')
+p_data = prepare_data(df_c, i_cols)
+```
+
+```{r echo=FALSE}
+with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                                response=value))
+```
+
+```{r}
+# Define model
+m = art(value ~ piece * modality + (1|subject), data=p_data)
+anova(m)
+```
+
+## Engagement: Behavioral (Visuals)
+
+```{r}
+  i_cols = c('SUBJECT','CONDITION', 'SCREEN_TIME_VISUALS_O', 
+             'SCREEN_TIME_VISUALS_S', 'SCREEN_TIME_VISUALS_T')
+  p_data = prepare_data(df_c, i_cols)
+```
+ 
+```{r echo=FALSE}
+  with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                               response=value))
+```
+ 
+### Analysis of Variance
+ 
+```{r}
+  m = art(value ~ piece * modality + (1|subject), data=p_data)
+  anova(m)
+```
+ 
+### Post-Hoc on Modality
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities(p_data)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+``` 
+
+*There is a significant difference in the users' behavior between AR and Interactive
+on the pieces Thai and Olympic. Similarly, the difference between AR and Static is
+significant on the Thai and Syria pieces.*
+
+## Engagement: Behavioral (Text)
+ 
+```{r}
+  i_cols = c('SUBJECT','CONDITION', 'SCREEN_TIME_TEXT_O', 
+             'SCREEN_TIME_TEXT_S', 'SCREEN_TIME_TEXT_T')
+  p_data = prepare_data(df_c, i_cols)
+```
+ 
+```{r echo=FALSE}
+  with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                               response=value))
+```
+
+### Analysis of Variance
+ 
+```{r}
+  m = art(value ~ piece * modality + (1|subject), data=p_data)
+  anova(m)
+```
+
+### Post-Hoc on Modality
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities(p_data)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+*There is a significant difference in the users' behavior between AR and Static
+on the Thai piece.*
+
+## View again
+ 
+```{r}
+  i_cols = c('SUBJECT','CONDITION', 'Usabilit_Others_2_O', 
+             'Usabilit_Sthers_2_S', 'Usabilit_Others_2_T')
+  p_data = prepare_data(df_c, i_cols)
+```
+ 
+```{r echo=FALSE}
+  with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                               response=value))
+```
+
+### Analysis of Variance
+ 
+```{r}
+  m = art(value ~ piece * modality + (1|subject), data=p_data)
+  anova(m)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+## Interest
+ 
+```{r}
+  i_cols = c('SUBJECT','CONDITION', 'Usabilit_Others_1_O', 
+             'Usabilit_Sthers_1_S', 'Usabilit_Others_1_T')
+  p_data = prepare_data(df_c, i_cols)
+```
+ 
+```{r echo=FALSE}
+  with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                               response=value))
+```
+
+### Analysis of Variance
+ 
+```{r}
+  m = art(value ~ piece * modality + (1|subject), data=p_data)
+  anova(m)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+## Comfortable
+ 
+```{r}
+  i_cols = c('SUBJECT','CONDITION', 'Usabilit_Others_3_O', 
+             'Usabilit_Sthers_3_S', 'Usabilit_Others_3_T')
+  p_data = prepare_data(df_c, i_cols)
+```
+ 
+```{r echo=FALSE}
+  with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                               response=value))
+```
+
+### Analysis of Variance
+ 
+```{r}
+  m = art(value ~ piece * modality + (1|subject), data=p_data)
+  anova(m)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+### Post-Hoc on Interaction
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_modalities_pieces(p_data)
+```
+
+## Specific Learning Modified Analysis
+ 
+```{r, warning=FALSE}
+  i_cols = c('SUBJECT','CONDITION', 'OBJECT_LEARN_SPEC_ALL_O', 
+             'OBJECTLEARN_TOTAL_S_ONLY4ITEMS', 'OBJECTLEARN_TOTAL_T_ONLY2ITEMS')
+  
+  p_data = prepare_data(filter(df_c, filter_. != 0), i_cols)
+```
+ 
+```{r echo=FALSE}
+  with(p_data, interaction.plot(x.factor=piece, trace.factor=modality, 
+                               response=value))
+```
+
+### Analysis of Variance
+ 
+```{r}
+  m = art(value ~ piece * modality + (1|subject), data=p_data)
+  anova(m)
+```
+
+### Post-Hoc on Piece
+
+```{r, warning=FALSE}
+# Pairwise comparisons using Holm-Bonferroni correction
+do_post_hoc_pieces(p_data)
+```
+
+## Summary
+
+```{r, echo=FALSE, results='asis', warning=FALSE}
+library(knitr)
+s_res = data.frame(dependent_var=c('Sense of Presence', 'Narrative Engagement and Transportation',
+                                   'Perceived Learning', 'Objective Knowledge Gain (I)',
+                                   'Objective Knowledge Gain (II)', 'Perceived Realism and Authenticity',
+                                   'Journalistic Norms', 'Usability (I)', 'Usability (II)',
+                                   'Intention to adopt the technology', 
+                                   'Engagement Behavioral (Visuals)',
+                                   'Engagement Behavioral (Text)',
+                                   'View again',
+                                   'Inerest',
+                                   'Comfortable',
+                                   'Specific Learning'),
+                   modality=c('*', ' ', ' ', ' ', ' ', ' ', ' ', '*', '*' ,' ', '*', '*', ' ', ' ', ' ', ' '),
+                   piece=c('*', '*', ' ', '*', '*', '*', '*', '*', '*' ,' ', '*', '*', ' ', '*', '*', '*'),
+                   inter_modality_piece=c('*', '*', '*', '*', ' ', ' ', '*', '*', '*', ' ', '*', '*', '*', ' ', '*', ' '))
+kable(s_res, caption='Summary of significant difference between factors. * indicates significant difference')
+```
+
+There are significant differences on the sense of presence, users' behavior, and usability between modalities.
+However, the interaction between modality and piece also affects significantly these factors.
+
+```{r, echo=FALSE, results='asis', warning=FALSE}
+s_res_inter = data.frame(dependent_var=c('Sense of Presence', 'Narrative Engagement and Transportation',
+                                   'Perceived Learning', 'Objective Knowledge Gain (I)',
+                                   'Journalistic Norms', 'Usability (I)', 'Usability (II)', 
+                                   'Behavioral (I)', 'Behavioral (II)' , 'View Again', 'Comfortable'),
+                         ar_inter_syria=c('*', ' ', ' ', '*', ' ', '*', ' ', ' ', ' ', ' ', ' '),
+                         ar_inter_olympic=c('*', '*', ' ', ' ', ' ', ' ', ' ', '*', ' ', ' ', ' '),
+                         ar_inter_thai=c(' ', ' ', '*', ' ', '*', '*', ' ', '*', ' ', ' ', '*'),
+                         ar_static_syria=c('*', ' ', ' ', ' ', ' ', ' ', '*', '*', ' ', ' ', '*'),
+                         ar_static_olympic=c('*', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '),
+                         ar_static_thai=c(' ', ' ', ' ', ' ', ' ', '*', '*', '*', '*', ' ', ' '),
+                         inter_static_olympic=c(' ', '*', '*', ' ', ' ', ' ', ' ', '*', ' ', ' ', ' '),
+                         inter_static_thai=c(' ', ' ', '*', ' ', '*', '*', '*', '*', ' ', ' ', '*'),
+                         inter_static_syria=c(' ', ' ', '*', ' ', '*', '*', ' ', '*', '*', ' ', ' '))
+kable(s_res_inter, 
+      align=c('l', rep('c', 9)),
+      caption='Summary of significant differences on pairwise comparison between modalities. * indicates significant difference')
+```
+
+There are a significant difference on the sense presence between AR and Interactive 
+and AR and Static on the pieces Syria and Olympic. The difference in the narrative 
+engagement and transportation is significant between AR and Interactive on the 
+Olympic story. People reported a significant difference on the perceived learning 
+between AR and Interactive on the Thai story. There are a significant difference
+on the knowledge gain between AR and Interactive on the story about Syria. Journalism
+norms are significantly different between AR and Interactive on the Thai story.
+Depending on the story, Thai or Syria, there are a significant difference in 
+usability between AR and Interactive and AR and Static.
